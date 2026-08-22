@@ -82,6 +82,7 @@ camera_mode = False
 camera_capture_image_path = ""
 camera_thread = None
 render_thread = None
+lcd_draw_lock = threading.Lock()
 clients = {}
 status_icon_factories = []
 shutdown_requested = False
@@ -674,7 +675,8 @@ class RenderThread(threading.Thread):
     def run(self):
         frame_interval = 1 / self.fps
         while self.running:
-            animation_active = self.render_frame(current_status, current_emoji, current_text, current_scroll_top, current_battery_level, current_battery_color)
+            with lcd_draw_lock:
+                animation_active = self.render_frame(current_status, current_emoji, current_text, current_scroll_top, current_battery_level, current_battery_color)
             if animation_active:
                 time.sleep(frame_interval)
                 continue
@@ -939,7 +941,11 @@ def handle_client(client_socket, addr, whisplay):
                         if set_camera_mode:
                             print("[Camera] Entering camera mode...")
                             camera_mode = True
-                            camera_thread = CameraThread(whisplay, camera_capture_image_path)
+                            camera_thread = CameraThread(
+                                whisplay,
+                                camera_capture_image_path,
+                                lcd_draw_lock,
+                            )
                             camera_thread.start()
                         else:
                             print("[Camera] Exiting camera mode...")
@@ -953,7 +959,7 @@ def handle_client(client_socket, addr, whisplay):
                     if trigger_camera_capture:
                         print("[Camera] Capturing image by command...")
                         if camera_thread is not None:
-                            camera_thread.capture()
+                            camera_thread.capture(camera_capture_image_path)
                             notification = {"event": "camera_capture"}
                             send_to_all_clients(notification)
 
@@ -1003,7 +1009,7 @@ def handle_client(client_socket, addr, whisplay):
         del clients[addr]
         client_socket.close()
 
-def start_socket_server(render_thread, host='0.0.0.0', port=12345):
+def start_socket_server(render_thread, host='127.0.0.1', port=12345):
     # Register button events
     whisplay.on_button_press(on_button_pressed)
     whisplay.on_button_release(on_button_release)
@@ -1040,7 +1046,7 @@ if __name__ == "__main__":
     # start render thread
     render_thread = RenderThread(whisplay, custom_font_path or "NotoSansSC-Bold.ttf", fps=30)
     render_thread.start()
-    start_socket_server(render_thread, host='0.0.0.0', port=12345)
+    start_socket_server(render_thread, host='127.0.0.1', port=12345)
     
     def cleanup_and_exit(signum, frame):
         print("[System] Exiting...")

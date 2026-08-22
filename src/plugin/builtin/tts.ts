@@ -116,7 +116,7 @@ export function registerTTSPlugins(): void {
     displayName: "LLM8850 MeloTTS",
     version: "1.0.0",
     type: "tts",
-    audioFormat: "mp3",
+    audioFormat: "wav",
     description: "LLM8850 MeloTTS text-to-speech",
     activate: () => {
       const ttsProcessor = require("../../cloud-api/local/llm8850-melotts").default;

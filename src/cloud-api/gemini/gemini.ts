@@ -15,10 +15,12 @@ export const geminiVisionModel =
   process.env.GEMINI_VISION_MODEL || "gemini-2.5-flash";
 export const geminiImageModel =
   process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image";
-
 export const gemini = GEMINI_API_KEY
   ? new GoogleGenAI({
       apiKey: GEMINI_API_KEY,
       fetch: undiciProxyFetch as any,
+      httpOptions: {
+        apiVersion: "v1beta"
+      }
     })
   : null;

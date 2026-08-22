@@ -19,3 +19,9 @@ docker/volume
 .DS_Store
 __pycache__
 .env.backups
+
+# Local models and hardware-test captures are reproducible runtime data.
+/models/
+/vosk-model-*.zip
+/masaru*.jpg
+/test.jpg

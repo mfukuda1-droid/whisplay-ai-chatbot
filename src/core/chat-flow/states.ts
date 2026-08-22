@@ -9,12 +9,14 @@ import {
   onCameraCapture,
   onTextInput,
   isButtonDown,
+  DOUBLE_CLICK_MAX_PRESS_MS,
 } from "../../device/display";
 import {
   recordAudio,
   recordAudioManually,
   recordFileFormat,
   getDynamicVoiceDetectLevel,
+  stopRecording,
 } from "../../device/audio";
 import { chatWithLLMStream } from "../../cloud-api/server";
 import { isImMode, summaryTextWithLLM } from "../../cloud-api/llm";
@@ -38,18 +40,48 @@ import {
   resetCameraModeControl,
 } from "./camera-mode";
 import { DEFAULT_EMOJI } from "../../utils";
+import { recognizeFace } from "../../device/face-recognition";
 import { isMusicPlaying, getCurrentTrackTitle, stopMusicPlayback, startPendingMusicPlayback, onMusicTrackChange, onMusicPlaybackEnd } from "../../device/music-player";
 import { autoSaveExchange, prepareMemoryPrompt } from "../../config/local-memory";
 
+let asrGeneration = 0;
+let recordingGeneration = 0;
+let sleepLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+let sleepPressStartedAt = 0;
+
+const clearPendingSleepPress = (resetStartedAt = true): void => {
+  if (sleepLongPressTimer) {
+    clearTimeout(sleepLongPressTimer);
+    sleepLongPressTimer = null;
+  }
+  if (resetStartedAt) {
+    sleepPressStartedAt = 0;
+  }
+};
+
+export const stopActiveRecordingFlow = (): void => {
+  recordingGeneration += 1;
+  stopRecording();
+};
+
 export const flowStates: Record<FlowName, FlowStateHandler> = {
   sleep: (ctx: ChatFlowContext) => {
+    clearPendingSleepPress();
     onButtonPressed(() => {
       resetCameraModeControl();
       // Stop any playing music when waking up
       stopMusicPlayback();
-      ctx.transitionTo("listening");
+      clearPendingSleepPress();
+      sleepPressStartedAt = Date.now();
+      sleepLongPressTimer = setTimeout(() => {
+        sleepLongPressTimer = null;
+        if (ctx.currentFlowName !== "sleep" || !isButtonDown()) return;
+        ctx.transitionTo("listening");
+      }, DOUBLE_CLICK_MAX_PRESS_MS + 25);
     });
-    onButtonReleased(noop);
+    onButtonReleased(() => {
+      clearPendingSleepPress();
+    });
     onCameraModeExit(null);
     onTextInput((text: string) => {
       if (ctx.currentFlowName !== "sleep") return;
@@ -63,6 +95,7 @@ export const flowStates: Record<FlowName, FlowStateHandler> = {
         "YYYYMMDD-HHmmss",
       )}.jpg`;
       onButtonDoubleClick(() => {
+        clearPendingSleepPress();
         enterCameraMode(captureImgPath);
         ctx.transitionTo("camera");
       });
@@ -81,21 +114,45 @@ export const flowStates: Record<FlowName, FlowStateHandler> = {
     });
   },
   camera: (ctx: ChatFlowContext) => {
+    stopActiveRecordingFlow();
     onButtonDoubleClick(null);
     onButtonPressed(() => {
       handleCameraModePress();
     });
     onButtonReleased(() => {
-      handleCameraModeRelease();
+      handleCameraModeRelease(
+        `${cameraDir}/capture-${moment().format("YYYYMMDD-HHmmss-SSS")}.jpg`,
+      );
     });
+    let faceRecognitionInFlight = false;
     onCameraCapture(() => {
       const captureImagePath = getCurrentStatus().capture_image_path;
       if (!captureImagePath) {
         return;
       }
       setLatestCapturedImg(captureImagePath);
-      setPendingCapturedImgForChat(captureImagePath);
       display({ image_icon_visible: true });
+
+      if (faceRecognitionInFlight) return;
+      faceRecognitionInFlight = true;
+
+      recognizeFace(captureImagePath)
+        .then(({ name }) => {
+          if (ctx.currentFlowName === "listening" || ctx.currentFlowName === "asr") return;
+          if (name) {
+            ctx.answerId += 1;
+            ctx.asrText = `（システム: カメラに${name}さんの顔が写りました。${name}さんに気づいたことが伝わるよう、自然に名前を呼んで挨拶してください。）`;
+            ctx.transitionTo("answer");
+          } else {
+            setPendingCapturedImgForChat(captureImagePath);
+          }
+        })
+        .catch((error) => {
+          console.error("Face recognition failed:", error);
+        })
+        .finally(() => {
+          faceRecognitionInFlight = false;
+        });
     });
     onCameraModeExit(() => {
       if (ctx.currentFlowName === "camera") {
@@ -152,6 +209,8 @@ export const flowStates: Record<FlowName, FlowStateHandler> = {
     });
   },
   listening: (ctx: ChatFlowContext) => {
+    if (ctx.currentFlowName !== "listening") return;
+    const currentRecordingGeneration = ++recordingGeneration;
     ctx.enterMusicAfterAnswer = false;
     ctx.musicDisplayText = "";
     ctx.isFromWakeListening = false;
@@ -162,11 +221,18 @@ export const flowStates: Record<FlowName, FlowStateHandler> = {
     ctx.currentRecordFilePath = `${ctx.recordingsDir
       }/user-${Date.now()}.${recordFileFormat}`;
     onButtonPressed(noop);
-    const listeningStartedAt = Date.now();
+    const listeningStartedAt = sleepPressStartedAt || Date.now();
+    sleepPressStartedAt = 0;
     // If button was already released before we entered this state, go back to sleep
     if (!isButtonDown()) {
       console.log("[listening] Button already released, returning to sleep");
       ctx.transitionTo("sleep");
+      return;
+    }
+    if (
+      currentRecordingGeneration !== recordingGeneration ||
+      ctx.currentFlowName !== "listening"
+    ) {
       return;
     }
     const { result, stop } = recordAudioManually(ctx.currentRecordFilePath);
@@ -189,10 +255,14 @@ export const flowStates: Record<FlowName, FlowStateHandler> = {
     onButtonReleased(handleRelease);
     result
       .then(() => {
+        if (currentRecordingGeneration !== recordingGeneration) return;
+        if (ctx.currentFlowName !== "listening") return;
         if (shouldIgnoreRecordingResult) return;
         ctx.transitionTo("asr");
       })
       .catch((err) => {
+        if (currentRecordingGeneration !== recordingGeneration) return;
+        if (ctx.currentFlowName !== "listening") return;
         console.error("Error during recording:", err);
         ctx.transitionTo("sleep");
       });
@@ -205,6 +275,7 @@ export const flowStates: Record<FlowName, FlowStateHandler> = {
     });
   },
   wake_listening: (ctx: ChatFlowContext) => {
+    const currentRecordingGeneration = ++recordingGeneration;
     ctx.enterMusicAfterAnswer = false;
     ctx.musicDisplayText = "";
     ctx.isFromWakeListening = true;
@@ -223,6 +294,8 @@ export const flowStates: Record<FlowName, FlowStateHandler> = {
       rag_icon_visible: false,
     });
     getDynamicVoiceDetectLevel().then((level) => {
+      if (currentRecordingGeneration !== recordingGeneration) return;
+      if (ctx.currentFlowName !== "wake_listening") return;
       display({
         status: "listening",
         emoji: DEFAULT_EMOJI,
@@ -232,9 +305,13 @@ export const flowStates: Record<FlowName, FlowStateHandler> = {
       });
       recordAudio(ctx.currentRecordFilePath, ctx.wakeRecordMaxSec, level)
         .then(() => {
+          if (currentRecordingGeneration !== recordingGeneration) return;
+          if (ctx.currentFlowName !== "wake_listening") return;
           ctx.transitionTo("asr");
         })
         .catch((err) => {
+          if (currentRecordingGeneration !== recordingGeneration) return;
+          if (ctx.currentFlowName !== "wake_listening") return;
           console.error("Error during auto recording:", err);
           ctx.endWakeSession();
           ctx.transitionTo("sleep");
@@ -242,24 +319,33 @@ export const flowStates: Record<FlowName, FlowStateHandler> = {
     });
   },
   asr: (ctx: ChatFlowContext) => {
+    const currentAsrGeneration = ++asrGeneration;
     display({
       status: "recognizing",
     });
     onButtonDoubleClick(null);
     Promise.race([
-      ctx.recognizeAudio(ctx.currentRecordFilePath, ctx.isFromWakeListening),
+      ctx.recognizeAudio(ctx.currentRecordFilePath, ctx.isFromWakeListening)
+        .catch((error) => {
+          console.error("Error during audio recognition:", error);
+          return "";
+        }),
       new Promise<string>((resolve) => {
         onButtonPressed(() => {
+          asrGeneration += 1;
           resolve("[UserPress]");
         });
         onButtonReleased(noop);
       }),
     ]).then((result) => {
-      if (ctx.currentFlowName !== "asr") return;
       if (result === "[UserPress]") {
-        ctx.transitionTo("listening");
+        if (ctx.currentFlowName === "asr") {
+          ctx.transitionTo("listening");
+        }
         return;
       }
+      if (currentAsrGeneration !== asrGeneration) return;
+      if (ctx.currentFlowName !== "asr") return;
       if (result) {
         console.log("Audio recognized result:", result);
         ctx.asrText = result;

@@ -40,6 +40,8 @@ class SharedCameraService:
         self.picam2 = None
         self.running = True
         self.stream_ref_count = 0
+        self.frames_written = 0
+        self.last_stream_error = ""
         self.state_lock = threading.Lock()
         self.camera_lock = threading.Lock()
 
@@ -84,7 +86,10 @@ class SharedCameraService:
             try:
                 image = self._capture_frame_image()
                 self._write_web_frame(image)
-            except Exception:
+                self.frames_written += 1
+                self.last_stream_error = ""
+            except Exception as e:
+                self.last_stream_error = repr(e)
                 time.sleep(0.2)
                 continue
             time.sleep(self.stream_interval_sec)
@@ -106,7 +111,14 @@ class SharedCameraService:
         if cmd in ["status", "ping"]:
             with self.state_lock:
                 active = self.stream_ref_count
-            return {"ok": True, "stream_ref_count": active, "ready": Picamera2 is not None}
+            return {
+                "ok": True,
+                "stream_ref_count": active,
+                "ready": Picamera2 is not None,
+                "frames_written": self.frames_written,
+                "last_stream_error": self.last_stream_error,
+                "frame_path": self.web_frame_path,
+            }
 
         if cmd == "start_stream":
             with self.state_lock:
@@ -219,18 +231,21 @@ def ensure_camera_daemon(timeout_sec: float = 3.0) -> bool:
 
 
 class CameraThread(threading.Thread):
-    def __init__(self, whisplay, image_path):
+    def __init__(self, whisplay, image_path, draw_lock):
         super().__init__()
         self.whisplay = whisplay
         self.running = False
         self.capture_image = None
         self.image_path = image_path
+        self.draw_lock = draw_lock
         self.web_frame_path = _default_web_frame_path()
         self.frame_poll_sec = max(
             0.03,
             int(os.getenv("WHISPLAY_CAMERA_UI_POLL_MS", "80")) / 1000,
         )
         self._stream_started = False
+        self._first_frame_drawn = False
+        self._last_frame_error = ""
 
     def start(self):
         self.running = True
@@ -245,42 +260,77 @@ class CameraThread(threading.Thread):
             self.whisplay.LCD_WIDTH,
             self.whisplay.LCD_HEIGHT,
         )
-        self.whisplay.draw_image(
-            0,
-            0,
-            self.whisplay.LCD_WIDTH,
-            self.whisplay.LCD_HEIGHT,
-            pixel_bytes,
-        )
+        with self.draw_lock:
+            self.whisplay.draw_image(
+                0,
+                0,
+                self.whisplay.LCD_WIDTH,
+                self.whisplay.LCD_HEIGHT,
+                pixel_bytes,
+            )
 
     def run(self):
+        print(f"[Camera] CameraThread started; frame_path={self.web_frame_path}")
         if not ensure_camera_daemon():
             print("[Camera] Failed to connect/start camera daemon")
             return
         response = camera_daemon_request("start_stream")
         self._stream_started = bool(response.get("ok"))
+        print(f"[Camera] start_stream response={response}")
 
         while self.running and self.capture_image is None:
             if os.path.exists(self.web_frame_path):
                 try:
                     image = Image.open(self.web_frame_path).convert("RGB")
                     self._draw_image_to_display(image)
-                except Exception:
-                    pass
+                    if not self._first_frame_drawn:
+                        stat = os.stat(self.web_frame_path)
+                        print(
+                            f"[Camera] First preview frame drawn; path={self.web_frame_path} "
+                            f"size={stat.st_size} mtime={stat.st_mtime} dimensions={image.size}"
+                        )
+                        self._first_frame_drawn = True
+                except Exception as e:
+                    error = repr(e)
+                    if error != self._last_frame_error:
+                        print(
+                            f"[Camera] Preview frame load/draw failed; "
+                            f"path={self.web_frame_path} error={error}"
+                        )
+                        self._last_frame_error = error
             time.sleep(self.frame_poll_sec)
 
         if self.capture_image is not None:
             self._draw_image_to_display(self.capture_image)
             time.sleep(2)
 
-    def capture(self):
+    def capture(self, image_path=None):
+        if image_path:
+            self.image_path = image_path
+        request_time = time.time()
+        frame_mtime = None
+        frame_size = None
+        if os.path.exists(self.web_frame_path):
+            frame_stat = os.stat(self.web_frame_path)
+            frame_mtime = frame_stat.st_mtime
+            frame_size = frame_stat.st_size
+        print(
+            f"[Camera] Capture requested; time={request_time} path={self.image_path} "
+            f"preview_path={self.web_frame_path} preview_mtime={frame_mtime} "
+            f"preview_size={frame_size}"
+        )
         response = camera_daemon_request("capture", {"path": self.image_path})
         if not response.get("ok"):
             print(f"[Camera] Capture failed: {response.get('error', 'unknown error')}")
             return
         if os.path.exists(self.image_path):
             self.capture_image = Image.open(self.image_path).convert("RGB")
-            print(f"[Camera] Captured image saved to {self.image_path}")
+            capture_stat = os.stat(self.image_path)
+            print(
+                f"[Camera] Captured image saved to {self.image_path}; "
+                f"size={capture_stat.st_size} mtime={capture_stat.st_mtime} "
+                f"dimensions={self.capture_image.size}"
+            )
 
     def stop(self):
         self.running = False

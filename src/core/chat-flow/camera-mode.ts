@@ -55,7 +55,7 @@ export function handleCameraModePress(): void {
   }, CAMERA_LONG_PRESS_MS);
 }
 
-export function handleCameraModeRelease(): void {
+export function handleCameraModeRelease(captureImgPath?: string): void {
   const status = getCurrentStatus();
   if (!status.camera_mode) {
     resetCameraModeControl();
@@ -69,7 +69,10 @@ export function handleCameraModeRelease(): void {
   }
 
   if (cameraModePressAt > 0 && duration <= CAMERA_LONG_PRESS_MS) {
-    display({ camera_capture: true });
+    display({
+      camera_capture: true,
+      ...(captureImgPath ? { capture_image_path: captureImgPath } : {}),
+    });
     if (cameraModeExitAfterCaptureTimer) {
       clearTimeout(cameraModeExitAfterCaptureTimer);
     }

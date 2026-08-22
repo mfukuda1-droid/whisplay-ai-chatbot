@@ -1,4 +1,8 @@
-import { purifyTextForTTS, splitSentences } from "../utils";
+import {
+  purifyTextForTTS,
+  splitSentences,
+  splitTextByLength,
+} from "../utils";
 import dotenv from "dotenv";
 import { playAudioData, stopPlaying } from "../device/audio";
 import { TTSResult } from "../type";
@@ -14,6 +18,9 @@ type SentencePlayCallback = (payload: {
   sentenceIndex: number;
   sentence: string;
 }) => void;
+type StreamResponserOptions = {
+  maxTTSChunkChars?: number;
+};
 
 export class StreamResponser {
   private ttsFunc: TTSFunc;
@@ -34,8 +41,11 @@ export class StreamResponser {
   private hasStartedTTS: boolean = false;
   private firstTTSPromise: Promise<TTSResult> | null = null;
   private activeTTSCount = 0;
+  private generation = 0;
+  private readonly maxTTSChunkChars?: number;
   private pendingTTSQueue: {
     text: string;
+    generation: number;
     resolve: (result: TTSResult) => void;
     reject: (error: unknown) => void;
   }[] = [];
@@ -48,7 +58,8 @@ export class StreamResponser {
     ttsFunc: TTSFunc,
     sentencesCallback?: SentencesCallback,
     textCallback?: TextCallback,
-    sentencePlayCallback?: SentencePlayCallback
+    sentencePlayCallback?: SentencePlayCallback,
+    options: StreamResponserOptions = {},
   ) {
     this.ttsFunc = async (text) => {
       console.time("[TTS time]");
@@ -61,7 +72,15 @@ export class StreamResponser {
     this.sentencesCallback = sentencesCallback;
     this.textCallback = textCallback;
     this.sentencePlayCallback = sentencePlayCallback;
+    this.maxTTSChunkChars = options.maxTTSChunkChars;
   }
+
+  private splitTTSUnits = (text: string): string[] => {
+    if (!this.maxTTSChunkChars) {
+      return [text];
+    }
+    return splitTextByLength(text, this.maxTTSChunkChars);
+  };
 
   private getCharEndForSentence(sentenceIndex: number): number {
     if (sentenceIndex < 0 || sentenceIndex >= this.displaySentences.length) {
@@ -119,13 +138,16 @@ export class StreamResponser {
       );
       return;
     }
+    const generation = this.generation;
     let currentIndex = 0;
     const playNext = async () => {
+      if (generation !== this.generation) return;
       if (currentIndex < this.speakQueue.length) {
         this.isPlaying = true;
         try {
           const item = this.speakQueue[currentIndex];
           const playParams = await item.ttsPromise;
+          if (generation !== this.generation) return;
           console.log(
             `Playing audio ${currentIndex + 1}/${this.speakQueue.length}`
           );
@@ -137,8 +159,11 @@ export class StreamResponser {
           });
           await playAudioData(playParams);
         } catch (error) {
-          console.error("Audio playback error:", error);
+          if (generation === this.generation) {
+            console.error("Audio playback error:", error);
+          }
         }
+        if (generation !== this.generation) return;
         currentIndex++;
         playNext();
       } else if (this.partialContent) {
@@ -162,9 +187,14 @@ export class StreamResponser {
   };
 
   private enqueueTTS = (text: string): Promise<TTSResult> => {
+    const generation = this.generation;
     if (!this.hasStartedTTS) {
       this.hasStartedTTS = true;
-      const task = this.ttsChain.then(() => this.ttsFunc(text));
+      const task = this.ttsChain.then(() =>
+        generation === this.generation
+          ? this.runTTSForGeneration(text, generation)
+          : { duration: 0 },
+      );
       this.ttsChain = task.then(
         () => undefined,
         () => undefined,
@@ -174,14 +204,34 @@ export class StreamResponser {
     }
 
     return (this.firstTTSPromise || Promise.resolve({ duration: 0 })).then(
-      () => this.enqueueLimitedTTS(text),
-      () => this.enqueueLimitedTTS(text),
+      () => this.enqueueLimitedTTS(text, generation),
+      () => this.enqueueLimitedTTS(text, generation),
     );
   };
 
-  private enqueueLimitedTTS = (text: string): Promise<TTSResult> => {
+  private runTTSForGeneration = async (
+    text: string,
+    generation: number,
+  ): Promise<TTSResult> => {
+    try {
+      return await this.ttsFunc(text);
+    } catch (error) {
+      if (generation !== this.generation) {
+        return { duration: 0 };
+      }
+      throw error;
+    }
+  };
+
+  private enqueueLimitedTTS = (
+    text: string,
+    generation: number,
+  ): Promise<TTSResult> => {
+    if (generation !== this.generation) {
+      return Promise.resolve({ duration: 0 });
+    }
     return new Promise((resolve, reject) => {
-      this.pendingTTSQueue.push({ text, resolve, reject });
+      this.pendingTTSQueue.push({ text, generation, resolve, reject });
       this.pumpTTSQueue();
     });
   };
@@ -195,10 +245,15 @@ export class StreamResponser {
       if (!item) {
         return;
       }
+      if (item.generation !== this.generation) {
+        item.resolve({ duration: 0 });
+        continue;
+      }
       this.activeTTSCount++;
-      this.ttsFunc(item.text)
+      this.runTTSForGeneration(item.text, item.generation)
         .then(item.resolve, item.reject)
         .finally(() => {
+          if (item.generation !== this.generation) return;
           this.activeTTSCount = Math.max(0, this.activeTTSCount - 1);
           this.pumpTTSQueue();
         });
@@ -211,9 +266,10 @@ export class StreamResponser {
     this.partialContent = this.partialContent.replace(/\n/g, " ");
     const { sentences, remaining } = splitSentences(this.partialContent);
     if (sentences.length > 0) {
-      this.parsedSentences.push(...sentences);
+      const ttsUnits = sentences.flatMap(this.splitTTSUnits);
+      this.parsedSentences.push(...ttsUnits);
       const startIndex = this.displaySentences.length;
-      this.displaySentences.push(...sentences);
+      this.displaySentences.push(...ttsUnits);
       this.sentencesCallback?.(this.displaySentences);
       // remove emoji
       const length = this.speakQueue.length;
@@ -222,7 +278,7 @@ export class StreamResponser {
         sentence: string;
         ttsPromise: Promise<TTSResult>;
       }[] = [];
-      sentences.forEach((sentence, index) => {
+      ttsUnits.forEach((sentence, index) => {
         const purified = purifyTextForTTS(sentence);
         if (!purified) {
           return;
@@ -246,20 +302,24 @@ export class StreamResponser {
 
   endPartial = (): void => {
     if (this.partialContent) {
-      this.parsedSentences.push(this.partialContent);
-      this.displaySentences.push(this.partialContent);
+      const ttsUnits = this.splitTTSUnits(this.partialContent);
+      this.parsedSentences.push(...ttsUnits);
+      const startIndex = this.displaySentences.length;
+      this.displaySentences.push(...ttsUnits);
       this.sentencesCallback?.(this.displaySentences);
-      const text = purifyTextForTTS(this.partialContent);
-      if (text) {
-        const length = this.speakQueue.length;
-        this.speakQueue.push({
-          sentenceIndex: this.displaySentences.length - 1,
-          sentence: this.displaySentences[this.displaySentences.length - 1],
-          ttsPromise: this.enqueueTTS(text),
-        });
-        if (length === 0 && !this.isPlaying) {
-          this.playAudioInOrder();
+      const length = this.speakQueue.length;
+      ttsUnits.forEach((sentence, index) => {
+        const text = purifyTextForTTS(sentence);
+        if (text) {
+          this.speakQueue.push({
+            sentenceIndex: startIndex + index,
+            sentence,
+            ttsPromise: this.enqueueTTS(text),
+          });
         }
+      });
+      if (this.speakQueue.length > length && length === 0 && !this.isPlaying) {
+        this.playAudioInOrder();
       }
       this.partialContent = "";
     }
@@ -278,6 +338,10 @@ export class StreamResponser {
   };
 
   stop = (): void => {
+    this.generation += 1;
+    this.pendingTTSQueue.splice(0).forEach((item) => {
+      item.resolve({ duration: 0 });
+    });
     this.speakQueue = [];
     this.speakQueue.length = 0;
     this.partialContent = "";
@@ -288,7 +352,6 @@ export class StreamResponser {
     this.hasStartedTTS = false;
     this.firstTTSPromise = null;
     this.activeTTSCount = 0;
-    this.pendingTTSQueue.length = 0;
     this.playEndResolve();
     stopPlaying();
   };

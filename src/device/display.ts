@@ -10,7 +10,7 @@ import dotEnv from "dotenv";
 dotEnv.config();
 
 const DOUBLE_CLICK_WINDOW_MS = 800;
-const DOUBLE_CLICK_MAX_PRESS_MS = 350;
+export const DOUBLE_CLICK_MAX_PRESS_MS = 350;
 
 export interface Status {
   status: string;
@@ -174,7 +174,7 @@ export class WhisplayDisplay {
     const command = `cd ${resolve(
       __dirname,
       "../../python",
-    )} && python3 chatbot-ui.py`;
+    )} && python3 -u chatbot-ui.py`;
     console.log("Starting Python process...");
     this.pythonProcess = exec(command, (error, stdout, stderr) => {
       if (error) {
@@ -251,7 +251,7 @@ export class WhisplayDisplay {
         this.client.destroy();
       }
       this.client = new Socket();
-      this.client.connect(12345, "0.0.0.0", () => {
+      this.client.connect(12345, "127.0.0.1", () => {
         console.log("Connected to local display socket");
         this.receiveBuffer = "";
         this.sendToDisplay(JSON.stringify(this.currentStatus));

@@ -4,7 +4,7 @@ import {
   splitSentences,
 } from "./../utils/index";
 import { display } from "../device/display";
-import { recognizeAudio, ttsProcessor } from "../cloud-api/server";
+import { recognizeAudio, ttsProcessor, ttsServer } from "../cloud-api/server";
 import { isImMode } from "../cloud-api/llm";
 import { DEFAULT_EMOJI, extractEmojis } from "../utils";
 import { StreamResponser } from "./StreamResponsor";
@@ -16,11 +16,12 @@ import {
   type WhisplayIMApprovalRequest,
 } from "../device/im-bridge";
 import { FlowStateMachine } from "./chat-flow/stateMachine";
-import { flowStates } from "./chat-flow/states";
+import { flowStates, stopActiveRecordingFlow } from "./chat-flow/states";
 import { ChatFlowContext, FlowName } from "./chat-flow/types";
 import { playWakeupChime } from "../device/audio";
 import { stopMusicPlayback, isMusicPlaying } from "../device/music-player";
 import type { Status } from "../device/display";
+import { TTSServer } from "../type";
 
 dotEnv.config();
 
@@ -73,6 +74,7 @@ class ChatFlow implements ChatFlowContext {
   private toolDisplaySeq = 0;
   private answerDisplayTimer?: ReturnType<typeof setTimeout>;
   private lastAnswerDisplayAt = 0;
+  private externalReplyGeneration = 0;
 
   constructor(options: { enableCamera?: boolean } = {}) {
     console.log(`[${getCurrentTimeTag()}] ChatBot started.`);
@@ -111,7 +113,11 @@ class ChatFlow implements ChatFlowContext {
             duration_ms: durationMs,
           },
         });
-      }
+      },
+      {
+        maxTTSChunkChars:
+          ttsServer === TTSServer.llm8850melotts ? 45 : undefined,
+      },
     );
     if (options?.enableCamera) {
       this.enableCamera = true;
@@ -233,6 +239,19 @@ class ChatFlow implements ChatFlowContext {
   };
 
   transitionTo = (flowName: FlowName): void => {
+    if (
+      this.currentFlowName === "external_answer" &&
+      flowName !== "external_answer"
+    ) {
+      this.externalReplyGeneration += 1;
+    }
+    if (
+      flowName !== this.currentFlowName &&
+      (this.currentFlowName === "listening" ||
+        this.currentFlowName === "wake_listening")
+    ) {
+      stopActiveRecordingFlow();
+    }
     if (flowName !== "music" && isMusicPlaying()) {
       stopMusicPlayback();
     }
@@ -432,8 +451,14 @@ class ChatFlow implements ChatFlowContext {
   };
 
   streamExternalReply = async (text: string, emoji?: string): Promise<void> => {
+    const generation = ++this.externalReplyGeneration;
+    const isCurrentReply = (): boolean =>
+      generation === this.externalReplyGeneration &&
+      this.currentFlowName === "external_answer";
     if (!text) {
-      this.streamResponser.endPartial();
+      if (isCurrentReply()) {
+        this.streamResponser.endPartial();
+      }
       return;
     }
     if (emoji) {
@@ -449,10 +474,12 @@ class ChatFlow implements ChatFlowContext {
       parts.push(remaining);
     }
     for (const part of parts) {
+      if (!isCurrentReply()) return;
       this.streamResponser.partial(part);
       this.updateAnswerDisplayText(`${this.answerDisplayText}${part}`);
       await new Promise((resolve) => setTimeout(resolve, 120));
     }
+    if (!isCurrentReply()) return;
     this.streamResponser.endPartial();
   };
 

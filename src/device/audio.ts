@@ -1,12 +1,20 @@
 import { spawn, ChildProcess } from "child_process";
 import { readFileSync } from "fs";
-import { isEmpty, noop, set } from "lodash";
+import { noop, set } from "lodash";
 import dotenv from "dotenv";
 import { ttsServer, asrServer } from "../cloud-api/server";
 import { pluginRegistry } from "../plugin";
 import type { ASRPlugin, TTSPlugin, AudioFormat } from "../plugin";
 import { ASRServer, TTSResult, TTSServer } from "../type";
 import { webAudioBridge } from "./web-audio-bridge";
+import {
+  hasRecordingProcesses,
+  isRecordingProcessTracked,
+  stopAllRecordingProcesses,
+  stopRecordingProcess,
+  trackRecordingProcess,
+  untrackRecordingProcess,
+} from "./recording-process";
 
 export { getDynamicVoiceDetectLevel } from "./voice-detect";
 
@@ -80,27 +88,7 @@ function startPlayerProcess() {
   return null;
 }
 
-let recordingProcessList: ChildProcess[] = [];
 let currentRecordingReject: (reason?: any) => void = noop;
-
-const removeRecordingProcess = (child: ChildProcess): void => {
-  recordingProcessList = recordingProcessList.filter((item) => item !== child);
-};
-
-const killRecordingProcess = (child: ChildProcess): void => {
-  console.log("Killing recording process", child.pid);
-  try {
-    child.kill("SIGINT");
-  } catch (e) { }
-  removeRecordingProcess(child);
-};
-
-const killAllRecordingProcesses = (): void => {
-  recordingProcessList.forEach((child) => {
-    killRecordingProcess(child);
-  });
-  recordingProcessList.length = 0;
-};
 
 export const playWakeupChime = (): Promise<void> => {
   return new Promise((resolve) => {
@@ -197,7 +185,7 @@ const recordAudio = async (
     const recordingProcess = spawn("sox", args);
 
     recordingProcess.on("error", (err) => {
-      killAllRecordingProcesses();
+      stopAllRecordingProcesses();
       reject(err);
     });
 
@@ -209,19 +197,19 @@ const recordAudio = async (
     });
 
     recordingProcess.on("exit", (code) => {
-      removeRecordingProcess(recordingProcess);
+      untrackRecordingProcess(recordingProcess);
       if (code && code !== 0) {
         reject(code);
         return;
       }
       resolve(outputPath);
     });
-    recordingProcessList.push(recordingProcess);
+    trackRecordingProcess(recordingProcess);
 
     // Set a timeout to kill the recording process after the specified duration
     setTimeout(() => {
-      if (recordingProcessList.includes(recordingProcess)) {
-        killRecordingProcess(recordingProcess);
+      if (isRecordingProcessTracked(recordingProcess)) {
+        stopRecordingProcess(recordingProcess);
         resolve(outputPath);
       }
     }, duration * 1000);
@@ -254,19 +242,19 @@ const recordAudioManually = (
     ]);
 
     recordingProcess.on("error", (err) => {
-      removeRecordingProcess(recordingProcess);
+      untrackRecordingProcess(recordingProcess);
       reject(err);
     });
 
     recordingProcess.stderr?.on("data", (data) => {
       console.error(data.toString());
     });
-    recordingProcessList.push(recordingProcess);
+    trackRecordingProcess(recordingProcess);
     stopFunc = () => {
-      killRecordingProcess(recordingProcess);
+      stopRecordingProcess(recordingProcess);
     };
     recordingProcess.on("exit", () => {
-      removeRecordingProcess(recordingProcess);
+      untrackRecordingProcess(recordingProcess);
       resolve(outputPath);
     });
   });
@@ -280,8 +268,8 @@ const stopRecording = (): void => {
   // Also stop any in-progress web recording.
   webAudioBridge.stopRecording();
 
-  if (!isEmpty(recordingProcessList)) {
-    killAllRecordingProcesses();
+  if (hasRecordingProcesses()) {
+    stopAllRecordingProcesses();
     try {
       currentRecordingReject();
     } catch (e) { }

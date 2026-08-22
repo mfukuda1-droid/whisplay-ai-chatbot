@@ -138,7 +138,9 @@ export function splitSentences(text: string): {
   sentences: string[];
   remaining: string;
 } {
-  const regex = /.*?([。！？!?，,]|(?<!\d)\.)(?=\s|$)/gs;
+  // Japanese sentence-ending punctuation does not require following whitespace.
+  // Keep the existing conservative behavior for periods and commas.
+  const regex = /.*?(?:[。！？!?]|(?<!\d)\.(?=\s|$)|[，,](?=\s|$))/gs;
 
   const sentences: string[] = [];
   let lastIndex = 0;
@@ -159,24 +161,40 @@ export function splitSentences(text: string): {
 
   const remaining = text.slice(lastIndex).trim();
 
-  // merge short sentences
-  const newSentences: string[] = [];
-  let buffer = "";
-  sentences.forEach((sentence) => {
-    if ((buffer + `${sentence} `).length <= 60) {
-      buffer += `${sentence} `;
-    } else {
-      if (buffer) {
-        newSentences.push(buffer);
+  return { sentences, remaining };
+}
+
+export function splitTextByLength(text: string, maxChars: number): string[] {
+  const chunks: string[] = [];
+  let remaining = Array.from(text.trim());
+  const safeMax = Math.max(1, Math.floor(maxChars));
+
+  while (remaining.length > safeMax) {
+    const minimumNaturalSplit = Math.floor(safeMax / 2);
+    let splitAt = safeMax;
+
+    for (let index = safeMax - 1; index >= minimumNaturalSplit; index--) {
+      if (/[、，,；;：:\s]/u.test(remaining[index])) {
+        splitAt = index + 1;
+        break;
       }
-      buffer = `${sentence} `;
     }
-  });
-  if (buffer) {
-    newSentences.push(buffer);
+
+    const chunk = remaining.slice(0, splitAt).join("").trim();
+    if (chunk) {
+      chunks.push(chunk);
+    }
+    remaining = remaining.slice(splitAt);
+    while (remaining.length > 0 && /\s/u.test(remaining[0])) {
+      remaining.shift();
+    }
   }
 
-  return { sentences: newSentences, remaining };
+  const finalChunk = remaining.join("").trim();
+  if (finalChunk) {
+    chunks.push(finalChunk);
+  }
+  return chunks;
 }
 
 export function getPcmWavDurationMs(

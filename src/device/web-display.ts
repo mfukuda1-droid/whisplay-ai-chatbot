@@ -4,6 +4,7 @@ import http from "http";
 import { Socket } from "net";
 import Koa from "koa";
 import Router from "@koa/router";
+import bodyParser from "koa-bodyparser";
 import serve from "koa-static";
 import { WebSocketServer, WebSocket, RawData } from "ws";
 import { dataDir, cameraFeedDir } from "../utils/dir";
@@ -16,6 +17,7 @@ import {
   type WebAudioBridgeServer,
 } from "./web-audio-bridge";
 import type { Status } from "./display";
+import { faceRegistrationService, requestPiCamera } from "./face-registration";
 
 type ButtonHandler = () => void;
 
@@ -43,6 +45,7 @@ export class WebDisplayServer implements WebAudioBridgeServer {
   private server: http.Server | null = null;
   private wsServer: WebSocketServer | null = null;
   private wsClients = new Set<WebSocket>();
+  private facePreviewStreaming = false;
 
   constructor(options: WebDisplayOptions) {
     this.host = options.host;
@@ -56,6 +59,12 @@ export class WebDisplayServer implements WebAudioBridgeServer {
 
     const staticRoot = this.resolveWebRoot();
     this.registerRoutes(staticRoot);
+    this.app.use(
+      bodyParser({
+        enableTypes: ["json"],
+        jsonLimit: "32kb",
+      }),
+    );
     this.app.use(this.router.routes());
     this.app.use(this.router.allowedMethods());
     this.app.use(serve(staticRoot));
@@ -112,6 +121,10 @@ export class WebDisplayServer implements WebAudioBridgeServer {
   }
 
   close(): void {
+    if (this.facePreviewStreaming) {
+      this.facePreviewStreaming = false;
+      requestPiCamera("stop_stream").catch(() => {});
+    }
     webAudioBridge.setServer(null);
     this.wsServer?.close();
     this.wsServer = null;
@@ -178,6 +191,88 @@ export class WebDisplayServer implements WebAudioBridgeServer {
       }
       ctx.type = getImageMimeType(this.cameraFramePath);
       ctx.body = fs.createReadStream(this.cameraFramePath);
+    });
+
+    this.router.get("/faces", (ctx) => {
+      ctx.set("Cache-Control", "no-store");
+      ctx.type = "text/html";
+      ctx.body = fs.createReadStream(path.join(staticRoot, "face-registration.html"));
+    });
+
+    this.router.get("/api/faces/status", async (ctx) => {
+      ctx.set("Cache-Control", "no-store");
+      const cameraEnabled = process.env.ENABLE_CAMERA === "true";
+      let cameraAvailable = false;
+      if (cameraEnabled) {
+        try {
+          const status = await requestPiCamera("status");
+          cameraAvailable = status.ok === true && status.ready === true;
+        } catch {}
+      }
+      ctx.body = {
+        enabled: process.env.FACE_REGISTRATION_WEB_ENABLED === "true",
+        cameraEnabled,
+        cameraAvailable,
+      };
+    });
+
+    this.router.post("/api/faces/camera/start", async (ctx) => {
+      ctx.set("Cache-Control", "no-store");
+      if (
+        process.env.FACE_REGISTRATION_WEB_ENABLED !== "true" ||
+        process.env.ENABLE_CAMERA !== "true"
+      ) {
+        ctx.status = 403;
+        ctx.body = { ok: false, reason: "camera_disabled" };
+        return;
+      }
+      try {
+        if (!this.facePreviewStreaming) {
+          const status = await requestPiCamera("status");
+          if (!status.ok || status.ready !== true) {
+            throw new Error(status.error || "Pi camera is unavailable");
+          }
+          const result = await requestPiCamera("start_stream");
+          if (!result.ok) throw new Error(result.error || "Failed to start Pi camera preview");
+          this.facePreviewStreaming = true;
+        }
+        ctx.body = { ok: true };
+      } catch (error) {
+        ctx.status = 503;
+        ctx.body = { ok: false, reason: "camera_unavailable" };
+      }
+    });
+
+    this.router.post("/api/faces/camera/stop", async (ctx) => {
+      ctx.set("Cache-Control", "no-store");
+      if (this.facePreviewStreaming) {
+        this.facePreviewStreaming = false;
+        await requestPiCamera("stop_stream").catch(() => {});
+      }
+      ctx.body = { ok: true };
+    });
+
+    this.router.post("/api/faces/register", async (ctx) => {
+      ctx.set("Cache-Control", "no-store");
+      if (process.env.FACE_REGISTRATION_WEB_ENABLED !== "true") {
+        ctx.status = 403;
+        ctx.body = { ok: false, reason: "registration_disabled" };
+        return;
+      }
+
+      const body = (ctx.request.body || {}) as Record<string, unknown>;
+      const result = await faceRegistrationService.registerFromPiCamera(body.name);
+      const cameraError =
+        result.reason === "camera_unavailable" ||
+        result.reason === "camera_capture_failed";
+      ctx.status = result.ok
+        ? 201
+        : result.reason === "registration_failed"
+          ? 500
+          : cameraError
+            ? 503
+            : 422;
+      ctx.body = result;
     });
 
   }

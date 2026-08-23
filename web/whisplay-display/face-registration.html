@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Whisplay 顔登録</title>
+  <link rel="stylesheet" href="/face-registration.css" />
+</head>
+<body>
+  <main class="page">
+    <header>
+      <a href="/" class="back">← Web Display</a>
+      <p class="eyebrow">WHISPLAY</p>
+      <h1>顔を登録</h1>
+      <p class="lead">Raspberry Pi本体のカメラに正面を向いてください。撮影した顔の特徴量はこの端末内に保存されます。</p>
+    </header>
+
+    <section class="panel" id="disabledPanel" hidden>
+      <h2>登録機能は無効です</h2>
+      <p id="disabledMessage"><code>FACE_REGISTRATION_WEB_ENABLED=true</code> を設定してチャットボットを再起動してください。</p>
+    </section>
+
+    <form class="panel" id="registrationForm">
+      <label for="personName">名前（必須）</label>
+      <input id="personName" name="name" maxlength="40" autocomplete="off" placeholder="例：まさる" required />
+
+      <div class="preview-wrap">
+        <img id="cameraPreview" alt="Raspberry Piカメラのプレビュー" hidden />
+        <div id="emptyPreview" class="empty-preview">Piカメラに接続しています…</div>
+      </div>
+
+      <div class="actions">
+        <button type="button" id="startCamera">プレビューを再接続</button>
+      </div>
+
+      <p class="hint" id="cameraHint">登録ボタンを押した時点で、Piカメラから新しい写真を撮影します。</p>
+      <label class="consent">
+        <input type="checkbox" id="consent" required />
+        この人物の同意を得て、顔特徴量を端末に保存します（必須）
+      </label>
+      <button class="register" type="submit" id="registerButton" disabled>Piカメラで撮影して登録</button>
+      <div class="message" id="message" role="status" aria-live="polite"></div>
+    </form>
+  </main>
+  <script src="/face-registration.js"></script>
+</body>
+</html>

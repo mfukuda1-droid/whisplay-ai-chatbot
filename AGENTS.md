@@ -341,6 +341,23 @@ WEB_AUDIO_ENABLED=true      # Use browser mic/speaker
 WEB_CAMERA_ENABLED=true     # Use browser camera
 ```
 
+### Web Face Registration
+The Web Display can expose a local face-registration page at `/faces`:
+
+```bash
+WHISPLAY_WEB_ENABLED=true
+ENABLE_CAMERA=true
+FACE_REGISTRATION_WEB_ENABLED=true
+```
+
+- The page previews and captures exclusively through the Raspberry Pi camera daemon;
+  browser-camera data and image uploads are not accepted.
+- `POST /api/faces/register` validates the name, captures a fresh Pi camera image,
+  then runs `python/register_face.py`.
+- Face encodings are stored locally in `data/known_faces/encodings.pkl`; temporary
+  uploaded images are removed after processing.
+- Keep the server on a trusted network and disable registration after use.
+
 ## Deployment Process
 
 ### Systemd Service Setup

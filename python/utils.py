@@ -227,3 +227,12 @@ class TextUtils:
     if current_line:
       lines.append(current_line)
     return lines
+
+
+# Install the optional 40x40 avatar overlay before chatbot-ui.py defines RenderThread.
+# If the renderer cannot be imported, the legacy emoji UI continues unchanged.
+try:
+  from avatar_runtime import install_avatar_hook
+  install_avatar_hook()
+except Exception as avatar_error:
+  print(f"[Avatar] Disabled: {avatar_error}")

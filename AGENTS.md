@@ -429,6 +429,8 @@ WEB_SEARCH_INCLUDE_IMAGES=false
 1. Python rendering: `python/chatbot-ui.py` (RenderThread class)
 2. Status icons: `python/status-bar-icon/` directory
 3. Node.js controller: `src/device/display.ts`
+4. Status avatars: `python/avatar_runtime.py` draws six native 64x64 RGBA pixel-art states without resampling. The `utils.py` class hook supplies `_status_avatar` during `render_header`; the header reserves the actual avatar width for terminal output and uses the original emoji path when no avatar matches. Status `idle` maps to avatar `sleep`; `starting`/`hello` map to avatar `idle`.
+5. Preview: `python3 python/preview_avatars.py` exports six actual-size transparent PNGs to `data/avatar-preview/`. Hardware-free checks: `python3 python/test/test_avatar_runtime.py`.
 
 ### Troubleshooting
 - **Audio issues**: Check `amixer` output, verify WM8960 driver loaded

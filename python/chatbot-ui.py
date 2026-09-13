@@ -163,7 +163,7 @@ class RenderThread(threading.Thread):
             return False
         else:
             current_image = None
-            header_height = 88 + 10  # header + margin
+            header_height = max(98, status_font_size + 8 + 64 + 6)
             # create a black background image for header
             image = Image.new("RGBA", (self.whisplay.LCD_WIDTH, header_height), (0, 0, 0, 255))
             draw = ImageDraw.Draw(image)
@@ -543,12 +543,20 @@ class RenderThread(threading.Thread):
         # Keep the emoji centered normally. While a command is running, use the
         # XiaoZhi layout: emoji on the left and terminal output beside it.
         emoji_bbox = emoji_font.getbbox(current_emoji)
-        emoji_w = emoji_bbox[2] - emoji_bbox[0]
+        avatar = getattr(self, "_status_avatar", None)
+        emoji_w = avatar.width if avatar is not None else emoji_bbox[2] - emoji_bbox[0]
         emoji_x = (image_width - emoji_w) // 2
         if current_terminal_text:
             emoji_x = self.whisplay.CornerHeight
         emoji_y = status_font_size + 8
-        TextUtils.draw_mixed_text(draw, image, current_emoji, emoji_font, (emoji_x, emoji_y))
+        if avatar is not None:
+            # Pillow rectangle endpoints are inclusive: clear exactly 64x64.
+            draw.rectangle((emoji_x, emoji_y, emoji_x + avatar.width - 1,
+                            emoji_y + avatar.height - 1), fill=(0, 0, 0, 255))
+            image.paste(avatar, (emoji_x, emoji_y), avatar)
+            top_height = max(top_height, emoji_y + avatar.height + 6)
+        else:
+            TextUtils.draw_mixed_text(draw, image, current_emoji, emoji_font, (emoji_x, emoji_y))
         if current_terminal_text:
             terminal_x = emoji_x + emoji_w + TERMINAL_MARGIN_X
             self.draw_terminal_output(

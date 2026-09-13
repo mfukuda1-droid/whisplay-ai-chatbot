@@ -229,7 +229,7 @@ class TextUtils:
     return lines
 
 
-# Install the optional 40x40 avatar overlay before chatbot-ui.py defines RenderThread.
+# Install the optional native 64x64 avatar hook before chatbot-ui.py defines RenderThread.
 # If the renderer cannot be imported, the legacy emoji UI continues unchanged.
 try:
   from avatar_runtime import install_avatar_hook

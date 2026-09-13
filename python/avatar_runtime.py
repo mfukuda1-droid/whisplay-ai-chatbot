@@ -1,37 +1,21 @@
-"""WhisPlay 40x40 status avatar renderer.
-
-This module keeps the avatar implementation self-contained and reversible.
-It installs a temporary class-construction hook so the existing RenderThread
-header renderer can be wrapped without duplicating chatbot-ui.py.
-"""
+"""WhisPlay 40x40 face-focused status avatar renderer."""
 
 import builtins
 import sys
 from PIL import Image, ImageDraw
 
-
 PALETTE = {
-    "outline": (2, 15, 45, 255),
-    "hair_dark": (8, 31, 79, 255),
-    "hair": (18, 50, 116, 255),
-    "hair_light": (61, 100, 177, 255),
-    "skin": (255, 214, 180, 255),
-    "skin_shadow": (242, 165, 124, 255),
-    "white": (255, 244, 212, 255),
-    "amber": (255, 181, 0, 255),
-    "amber_dark": (144, 63, 8, 255),
-    "orange": (255, 119, 0, 255),
-    "orange_light": (255, 174, 0, 255),
-    "brown": (82, 34, 33, 255),
-    "navy": (13, 37, 91, 255),
-    "blue": (44, 84, 153, 255),
-    "cyan": (61, 211, 232, 255),
-    "red": (235, 58, 32, 255),
-    "blush": (255, 168, 151, 255),
-    "transparent": (0, 0, 0, 0),
+    "outline": (2, 15, 45, 255), "hair_dark": (8, 31, 79, 255),
+    "hair": (18, 50, 116, 255), "hair_light": (61, 100, 177, 255),
+    "skin": (255, 214, 180, 255), "skin_shadow": (242, 165, 124, 255),
+    "white": (255, 244, 212, 255), "amber": (255, 181, 0, 255),
+    "amber_dark": (144, 63, 8, 255), "orange": (255, 119, 0, 255),
+    "orange_light": (255, 174, 0, 255), "brown": (82, 34, 33, 255),
+    "navy": (13, 37, 91, 255), "blue": (44, 84, 153, 255),
+    "cyan": (61, 211, 232, 255), "red": (235, 58, 32, 255),
+    "blush": (255, 168, 151, 255), "transparent": (0, 0, 0, 0),
     "black": (0, 0, 0, 255),
 }
-
 
 class AvatarRenderer:
     SIZE = 40
@@ -48,119 +32,95 @@ class AvatarRenderer:
 
     @staticmethod
     def _status_key(status):
-        value = (status or "").lower()
-        if value in {"starting", "hello"}:
-            return "idle"
-        if value == "idle":
-            return "sleep"
-        if value in {"detecting", "listening"}:
-            return "listening"
-        if value in {"recognizing", "thinking"}:
-            return "thinking"
-        if value.startswith("answer"):
-            return "answer"
-        if value == "error":
-            return "error"
+        value = (status or "").lower().strip()
+        if value in {"starting", "hello"}: return "idle"
+        if value == "idle": return "sleep"
+        if value in {"detecting", "listening"}: return "listening"
+        if value in {"recognizing", "thinking"}: return "thinking"
+        if value.startswith("answer"): return "answer"
+        if value == "error": return "error"
         return None
 
     @classmethod
     def _draw(cls, state):
         p = PALETTE
-        img = Image.new("RGBA", (cls.SIZE, cls.SIZE), p["transparent"])
+        img = Image.new("RGBA", (40, 40), p["transparent"])
         d = ImageDraw.Draw(img)
 
-        # Hair silhouette / bob.
-        d.polygon([(5,11),(8,6),(14,3),(26,3),(32,6),(35,11),(37,22),(34,30),(29,34),(11,34),(6,30),(3,23)], fill=p["outline"])
-        d.polygon([(7,12),(10,7),(15,5),(25,5),(30,7),(33,12),(35,23),(31,30),(27,32),(13,32),(8,29),(5,22)], fill=p["hair_dark"])
-        d.polygon([(9,11),(13,7),(18,5),(25,6),(30,9),(32,18),(31,25),(28,29),(12,29),(8,25),(7,18)], fill=p["hair"])
-        d.rectangle((10,9,12,17), fill=p["hair_light"])
-        d.rectangle((14,6,18,8), fill=p["hair_light"])
-        d.rectangle((28,10,30,17), fill=p["blue"])
+        # Face-first composition: the head fills almost the entire 40x40 tile.
+        d.ellipse((1, 1, 38, 39), fill=p["outline"])
+        d.ellipse((3, 3, 36, 38), fill=p["hair_dark"])
+        d.ellipse((5, 4, 34, 36), fill=p["hair"])
+        d.rectangle((7, 8, 10, 20), fill=p["hair_light"])
+        d.rectangle((12, 5, 18, 7), fill=p["hair_light"])
+        d.rectangle((30, 9, 32, 18), fill=p["blue"])
 
-        # Face.
-        d.rounded_rectangle((9,11,31,31), radius=8, fill=p["skin"], outline=p["outline"], width=1)
-        d.rectangle((11,12,28,16), fill=p["skin"])
+        # Large face area; torso intentionally removed for readability.
+        d.rounded_rectangle((7, 10, 33, 36), radius=10, fill=p["skin"], outline=p["outline"], width=1)
+        d.rectangle((9, 11, 31, 16), fill=p["skin"])
 
-        # Bangs.
-        d.polygon([(9,10),(13,6),(16,6),(16,15),(18,12),(19,5),(23,5),(23,15),(25,12),(27,7),(31,11),(29,16),(11,16)], fill=p["hair"])
-        d.rectangle((18,5,20,14), fill=p["hair_dark"])
+        # Large fixed bangs.
+        d.polygon([(6,11),(10,6),(15,4),(17,15),(19,11),(20,3),(24,4),(24,15),(27,10),(30,7),(34,12),(31,17),(9,17)], fill=p["hair"])
+        d.rectangle((19,4,21,14), fill=p["hair_dark"])
 
-        # Orange diamond hair clip.
-        d.polygon([(28,7),(31,9),(29,12),(26,10)], fill=p["orange"], outline=p["outline"])
-        d.polygon([(28,8),(30,9),(29,11),(27,10)], fill=p["orange_light"])
+        # Larger orange hair clip.
+        d.polygon([(29,5),(34,8),(31,13),(26,10)], fill=p["orange"], outline=p["outline"])
+        d.polygon([(29,7),(32,8),(31,11),(28,10)], fill=p["orange_light"])
 
-        # Ears / side accents.
-        d.rectangle((7,20,9,25), fill=p["skin_shadow"])
-        d.rectangle((31,20,33,25), fill=p["skin_shadow"])
-        d.rectangle((6,27,8,30), fill=p["orange"])
-        d.rectangle((32,27,34,30), fill=p["orange"])
-
-        # Eyes and expression.
         if state == "sleep":
-            d.line((12,22,15,24,18,22), fill=p["brown"], width=2)
-            d.line((22,22,25,24,28,22), fill=p["brown"], width=2)
-            d.arc((17,25,23,29), 10, 170, fill=p["brown"], width=1)
-            d.rectangle((31,14,33,16), fill=p["cyan"])
-            d.rectangle((33,12,35,14), fill=p["cyan"])
+            d.line((10,23,14,26,18,23), fill=p["brown"], width=2)
+            d.line((22,23,26,26,30,23), fill=p["brown"], width=2)
+            d.arc((16,29,24,34), 10, 170, fill=p["brown"], width=1)
+            d.rectangle((32,15,34,17), fill=p["cyan"])
+            d.rectangle((34,12,37,14), fill=p["cyan"])
+            d.rectangle((36,8,39,10), fill=p["cyan"])
         elif state == "error":
-            d.line((11,20,17,25), fill=p["brown"], width=2)
-            d.line((17,20,11,25), fill=p["brown"], width=2)
-            d.line((23,20,29,25), fill=p["brown"], width=2)
-            d.line((29,20,23,25), fill=p["brown"], width=2)
-            d.line((16,29,19,27,22,29,25,27), fill=p["brown"], width=1)
-            d.rectangle((34,6,36,12), fill=p["red"])
-            d.rectangle((34,14,36,16), fill=p["red"])
+            d.line((9,21,17,27), fill=p["brown"], width=3)
+            d.line((17,21,9,27), fill=p["brown"], width=3)
+            d.line((23,21,31,27), fill=p["brown"], width=3)
+            d.line((31,21,23,27), fill=p["brown"], width=3)
+            d.line((15,33,19,30,23,33,27,30), fill=p["brown"], width=2)
+            d.rectangle((35,4,38,12), fill=p["red"])
+            d.rectangle((35,14,38,17), fill=p["red"])
         else:
-            cls._eye(d, 15, 22, wide=state == "listening", look_right=state == "thinking")
-            cls._eye(d, 25, 22, wide=state == "listening", look_right=state == "thinking")
+            cls._eye(d, 14, 24, wide=state == "listening", look_right=state == "thinking")
+            cls._eye(d, 26, 24, wide=state == "listening", look_right=state == "thinking")
             if state == "listening":
-                d.ellipse((19,27,21,30), fill=p["brown"])
-                # Strong cyan audio waves so listening differs clearly from idle.
-                d.arc((1,15,8,29), 285, 75, fill=p["cyan"], width=2)
-                d.arc((32,15,39,29), 105, 255, fill=p["cyan"], width=2)
+                d.ellipse((18,30,22,35), fill=p["brown"])
+                # Approved listening cue: big eyes + O mouth + strong cyan waves.
+                d.arc((0,15,8,32), 275, 85, fill=p["cyan"], width=3)
+                d.arc((32,15,40,32), 95, 265, fill=p["cyan"], width=3)
             elif state == "thinking":
-                d.ellipse((19,28,21,29), fill=p["brown"])
-                d.rectangle((33,7,35,12), fill=p["orange_light"])
-                d.rectangle((35,5,37,7), fill=p["orange_light"])
-                d.rectangle((34,14,36,16), fill=p["orange_light"])
+                d.ellipse((18,31,22,33), fill=p["brown"])
+                d.arc((32,4,39,12), 200, 500, fill=p["orange_light"], width=3)
+                d.rectangle((35,14,38,17), fill=p["orange_light"])
             elif state == "answer":
-                d.rectangle((17,27,23,31), fill=p["brown"])
-                d.rectangle((18,28,22,29), fill=p["blush"])
-                d.rectangle((32,25,35,27), fill=p["orange_light"])
-                d.rectangle((34,28,37,30), fill=p["orange_light"])
+                d.rectangle((15,29,25,35), fill=p["brown"])
+                d.rectangle((17,31,23,33), fill=p["blush"])
+                d.polygon([(33,24),(39,21),(37,27)], fill=p["orange_light"])
+                d.polygon([(34,30),(39,31),(35,34)], fill=p["orange_light"])
             else:
-                d.arc((17,26,23,30), 5, 175, fill=p["brown"], width=1)
+                d.arc((15,29,25,35), 5, 175, fill=p["brown"], width=2)
 
-        # Blush.
         if state not in {"sleep", "error"}:
-            d.rectangle((10,26,12,27), fill=p["blush"])
-            d.rectangle((28,26,30,27), fill=p["blush"])
-
-        # Collar and navy outfit.
-        d.polygon([(10,32),(15,30),(20,34),(25,30),(30,32),(32,39),(8,39)], fill=p["navy"], outline=p["outline"])
-        d.polygon([(11,31),(16,30),(20,34),(15,36)], fill=p["white"])
-        d.polygon([(29,31),(24,30),(20,34),(25,36)], fill=p["white"])
-        d.rectangle((18,36,22,39), fill=p["orange"])
-
+            d.rectangle((8,29,11,30), fill=p["blush"])
+            d.rectangle((29,29,32,30), fill=p["blush"])
         return img
 
     @staticmethod
     def _eye(draw, x, y, wide=False, look_right=False):
         p = PALETTE
-        rx = 4 if wide else 3
-        ry = 5 if wide else 4
-        draw.ellipse((x-rx, y-ry, x+rx, y+ry), fill=p["white"], outline=p["outline"])
-        pupil_x = x + (1 if look_right else 0)
-        draw.ellipse((pupil_x-2, y-2, pupil_x+2, y+3), fill=p["amber_dark"])
-        draw.rectangle((pupil_x-1, y, pupil_x+1, y+2), fill=p["amber"])
-        draw.rectangle((pupil_x-1, y-2, pupil_x, y-1), fill=p["white"])
+        rx, ry = (5, 6) if wide else (4, 5)
+        draw.ellipse((x-rx, y-ry, x+rx, y+ry), fill=p["white"], outline=p["outline"], width=1)
+        pupil_x = x + (2 if look_right else 0)
+        draw.ellipse((pupil_x-3, y-3, pupil_x+3, y+4), fill=p["amber_dark"])
+        draw.rectangle((pupil_x-2, y, pupil_x+2, y+3), fill=p["amber"])
+        draw.rectangle((pupil_x-2, y-3, pupil_x, y-1), fill=p["white"])
 
 
 def install_avatar_hook():
-    """Wrap chatbot-ui.py RenderThread.render_header when the class is created."""
     if getattr(builtins, "_whisplay_avatar_hook_installed", False):
         return
-
     original_build_class = builtins.__build_class__
     builtins._whisplay_avatar_hook_installed = True
 
@@ -168,7 +128,6 @@ def install_avatar_hook():
         cls = original_build_class(func, name, *bases, **kwargs)
         if name != "RenderThread":
             return cls
-
         original_render_header = getattr(cls, "render_header", None)
         if original_render_header is None:
             builtins.__build_class__ = original_build_class
@@ -179,7 +138,6 @@ def install_avatar_hook():
             avatar = AvatarRenderer.for_status(status)
             if avatar is None:
                 return result
-
             main = sys.modules.get("__main__")
             status_font_size = getattr(main, "status_font_size", 20)
             terminal_text = getattr(main, "current_terminal_text", "")
@@ -187,10 +145,7 @@ def install_avatar_hook():
             if terminal_text:
                 x = self.whisplay.CornerHeight
             y = status_font_size + 8
-
-            # Clear the original emoji area, then draw the avatar. Existing
-            # header/status-icon logic remains untouched and acts as fallback.
-            draw.rectangle((x - 2, y - 2, x + AvatarRenderer.SIZE + 2, y + AvatarRenderer.SIZE + 2), fill=(0, 0, 0, 255))
+            draw.rectangle((x - 2, y - 2, x + 42, y + 42), fill=(0, 0, 0, 255))
             image.paste(avatar, (x, y), avatar)
             return result
 

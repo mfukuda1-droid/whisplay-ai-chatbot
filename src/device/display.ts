@@ -98,7 +98,16 @@ export class WhisplayDisplay {
     }
     this.cameraEnabled = parseBoolEnv("ENABLE_CAMERA", false);
     const webCameraEnabled = parseBoolEnv("WEB_CAMERA_ENABLED", false);
-    if (this.cameraEnabled && !webCameraEnabled) {
+    const webFaceRegistrationEnabled = parseBoolEnv(
+      "FACE_REGISTRATION_WEB_ENABLED",
+      false,
+    );
+    if (
+      this.cameraEnabled &&
+      (!webCameraEnabled || webFaceRegistrationEnabled)
+    ) {
+      // Face registration always uses the Pi camera, even when the normal chat
+      // capture path is configured to use a browser camera.
       this.ensureCameraDaemon();
     }
     const webEnabled = parseBoolEnv("WHISPLAY_WEB_ENABLED", false);

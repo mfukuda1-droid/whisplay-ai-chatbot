@@ -476,6 +476,21 @@ body {
   cursor: not-allowed;
 }
 
+.face-registration-link {
+  display: block;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  color: var(--accent);
+  text-align: center;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.face-registration-link:hover {
+  border-color: var(--accent);
+}
+
 @media (max-width: 860px) {
   .wrap {
     grid-template-columns: 1fr;

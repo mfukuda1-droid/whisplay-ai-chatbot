@@ -4,7 +4,7 @@ import sys
 import json
 import os
 
-ENCODINGS_PATH = "data/known_faces/encodings.pkl"
+ENCODINGS_PATH = os.environ.get("FACE_ENCODINGS_PATH", "data/known_faces/encodings.pkl")
 TOLERANCE = 0.5  # 小さいほど厳しく判定（似た家族間で誤認識するなら下げる）
 
 def recognize(image_path, tolerance=TOLERANCE):
